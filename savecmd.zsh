@@ -3,7 +3,6 @@
 
 # Function to save a command with a name to local history
 # TODO sort categories and commands within cat by date
-# TODO nvim plugin few last used... and categories
 
 # Helper function to update stats
 _update_cmd_stats() {
