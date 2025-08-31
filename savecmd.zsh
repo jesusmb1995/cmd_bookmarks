@@ -2,7 +2,6 @@
 # By jesusmb1995 under MIT license
 
 # Function to save a command with a name to local history
-# TODO when name append new command with &&
 # TODO sort categories and commands within cat by date
 # TODO nvim plugin few last used... and categories
 
@@ -22,8 +21,22 @@ _update_cmd_stats() {
     echo "$cmd_name|$timestamp" >> "$cmd_stats"
 }
 
+# Save new bookmark or append additional step to existing bookmark
+# If no namee, append to last bookmark
 cmdsave() {
     local cmd_name="$1"
+    if [[ -z "$cmd_name" ]]; then
+        # If no name provided, try to get the last used bookmark from stats
+        local dir="$(pwd)"
+        local cmd_stats="$dir/.local_cmd_bookmarks_stats"
+        if [[ -f "$cmd_stats" ]]; then
+            cmd_name=$(sort -t'|' -k2,2nr "$cmd_stats" | head -1 | cut -d'|' -f1)
+        fi
+    fi
+    if [[ -z "$cmd_name" ]]; then
+        echo "Error: No last used bookmark found. Provide a name for the command."
+        return 1
+    fi
     local dir="$(pwd)"
     local cmd_bookmarks="$dir/.local_cmd_bookmarks"
 
@@ -41,9 +54,25 @@ cmdsave() {
         return 1
     fi
 
-    # Save the command with its name
-    echo "$cmd_name|$last_cmd" >> "$cmd_bookmarks"
-    echo "Saved '$last_cmd' as '$cmd_name'"
+    # Check if command already exists
+    local existing_cmd=""
+    if [[ -f "$cmd_bookmarks" ]]; then
+        existing_cmd=$(grep "^$cmd_name|" "$cmd_bookmarks" | tail -1 | cut -d'|' -f2-)
+    fi
+
+    if [[ -n "$existing_cmd" ]]; then
+        # Command exists, append with &&
+        local new_cmd="$existing_cmd && $last_cmd"
+        # Remove the old entry and add the new one
+        sed -i "/^$cmd_name|/d" "$cmd_bookmarks" 2>/dev/null
+        echo "$cmd_name|$new_cmd" >> "$cmd_bookmarks"
+        echo "Appended '$last_cmd' to existing command '$cmd_name'"
+        echo "New command: $new_cmd"
+    else
+        # Command doesn't exist, save as new
+        echo "$cmd_name|$last_cmd" >> "$cmd_bookmarks"
+        echo "Saved '$last_cmd' as '$cmd_name'"
+    fi
 
     _update_cmd_stats "$cmd_name"
 
