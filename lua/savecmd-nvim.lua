@@ -9,9 +9,19 @@ local config = {
     title_pos = "center",
 }
 
+-- Last command tracking
+local last_command = nil
+local last_window_type = nil
+
 -- Get the current working directory
 local function get_cwd()
     return vim.fn.getcwd()
+end
+
+-- Save last command info in memory
+local function save_last_command_info(command, window_type)
+    last_command = command
+    last_window_type = window_type
 end
 
 -- Read and parse the command bookmarks file
@@ -83,6 +93,44 @@ local function filter_commands(commands, query)
     return filtered
 end
 
+-- Execute command with specified window type
+local function execute_command(command, window_type)
+    -- Make sure to use same ids as: https://github.com/NvChad/NvChad/blob/v2.5/lua/nvchad/mappings.lua
+    if window_type == "vertical" then
+        -- Use NvChad's vertical terminal runner
+        require("nvchad.term").runner {
+            pos = "vsp",
+            cmd = command,
+            id = "vtoggleTerm",
+            clear_cmd = false
+        }
+    elseif window_type == "horizontal" then
+        -- Use NvChad's horizontal terminal runner
+        require("nvchad.term").runner {
+            pos = "sp",
+            cmd = command,
+            id = "htoggleTerm",
+            clear_cmd = false
+        }
+    elseif window_type == "float" then
+        -- Use NvChad's float terminal runner
+        require("nvchad.term").runner {
+            pos = "float",
+            cmd = command,
+            id = "floatTerm",
+            clear_cmd = false
+        }
+    else
+        vim.notify("Invalid launch type: " .. window_type, vim.log.levels.ERROR)
+        return
+    end
+    
+    -- Save as last command in memory
+    save_last_command_info(command, window_type)
+    
+    vim.notify("Running: " .. command, vim.log.levels.INFO)
+end
+
 -- Create floating window
 local function create_floating_window(commands, launch_type)
     if #commands == 0 then
@@ -110,39 +158,7 @@ local function create_floating_window(commands, launch_type)
     }, function(choice)
         if choice then
             local selected_cmd = choice.command
-            
-            -- Execute the command based on launch type
-            -- Make sure to use same ids as: https://github.com/NvChad/NvChad/blob/v2.5/lua/nvchad/mappings.lua
-            if launch_type == "vertical" then
-                -- Use NvChad's vertical terminal runner
-                require("nvchad.term").runner {
-                    pos = "vsp",
-                    cmd = selected_cmd.command,
-                    id = "vtoggleTerm",
-                    clear_cmd = false
-                }
-            elseif launch_type == "horizontal" then
-                -- Use NvChad's horizontal terminal runner
-                require("nvchad.term").runner {
-                    pos = "sp",
-                    cmd = selected_cmd.command,
-                    id = "htoggleTerm",
-                    clear_cmd = false
-                }
-            elseif launch_type == "float" then
-                -- Use NvChad's float terminal runner
-                require("nvchad.term").runner {
-                    pos = "float",
-                    cmd = selected_cmd.command,
-                    id = "floatTerm",
-                    clear_cmd = false
-                }
-            else
-                vim.notify("Invalid launch type: " .. launch_type, vim.log.levels.ERROR)
-                return
-            end
-            
-            vim.notify("Running: " .. selected_cmd.command, vim.log.levels.INFO)
+            execute_command(selected_cmd.command, launch_type)
         end
     end)
 end
@@ -163,6 +179,15 @@ function M.launch_float()
   create_floating_window(commands, "float")
 end
 
+function M.launch_last()
+    if not last_command or not last_window_type then
+        vim.notify("No previous command found to run", vim.log.levels.WARN)
+        return
+    end
+    
+    execute_command(last_command, last_window_type)
+end
+
 -- Setup function
 function M.setup(opts)
     config = vim.tbl_deep_extend("force", config, opts or {})
@@ -178,6 +203,10 @@ function M.setup(opts)
 
     vim.api.nvim_create_user_command("LaunchFloat", M.launch_float, {
         desc = "Launch saved commands in floating window"
+    })
+    
+    vim.api.nvim_create_user_command("LaunchLast", M.launch_last, {
+        desc = "Launch the last run command in the same window type"
     })
 end
 

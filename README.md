@@ -24,6 +24,7 @@ _return {
       { "<leader><A-v>", "<cmd>LaunchVert<cr>", desc = "Launch command in vertical terminal" },
       { "<leader><A-h>", "<cmd>LaunchHoriz<cr>", desc = "Launch command in horizontal terminal" },
       { "<leader><A-i>", "<cmd>LaunchFloat<cr>", desc = "Launch command in horizontal terminal" },
+      { "<leader>rr", "<cmd>LaunchLast<cr>", desc = "Launch last run command" }
     },
     config = function()
       require('savecmd-nvim').setup()
