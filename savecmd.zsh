@@ -81,6 +81,12 @@ cmdsave() {
 
 # Function to execute a saved command
 cmdrun() {
+    if [[ $# -gt 1 ]]; then
+        for cmd_name in "$@"; do
+            cmdrun "$cmd_name" || return $?
+        done
+        return
+    fi
     local cmd_name="$1"
     local dir="$(pwd)"
     local cmd_bookmarks="$dir/.local_cmd_bookmarks"
