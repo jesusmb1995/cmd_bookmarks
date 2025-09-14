@@ -166,10 +166,40 @@ local function execute_command(command, window_type, command_name)
     vim.notify("Running: " .. command, vim.log.levels.INFO)
 end
 
--- Create floating window
+-- Create floating window with Telescope
 local function create_floating_window(commands, launch_type)
     if #commands == 0 then
         vim.notify("No saved commands found in current directory", vim.log.levels.INFO)
+        return
+    end
+    
+    -- Check if Telescope is available
+    local telescope_available = pcall(require, 'telescope')
+    
+    if not telescope_available then
+        -- Fallback to vim.ui.select if Telescope is not available
+        local display_items = {}
+        for i, cmd in ipairs(commands) do
+            local number_str = string.format("%2d", i)
+            local display_text = string.format("[%s] %s", number_str, cmd.name)
+            table.insert(display_items, {
+                index = i,
+                command = cmd,
+                display = display_text,
+            })
+        end
+
+        vim.ui.select(display_items, {
+            prompt = "Select a command to run:",
+            format_item = function(item)
+                return item.display
+            end,
+        }, function(choice)
+            if choice then
+                local selected_cmd = choice.command
+                execute_command(selected_cmd.command, launch_type, selected_cmd.name)
+            end
+        end)
         return
     end
     
@@ -181,21 +211,95 @@ local function create_floating_window(commands, launch_type)
         table.insert(display_items, {
             index = i,
             command = cmd,
-            display = display_text
+            display = display_text,
+            preview_content = string.format("\n[%s] %s\n\n%s", 
+                cmd.name,
+                cmd.last_used > 0 and os.date("%Y-%m-%d %H:%M:%S", cmd.last_used) or "Never",
+                cmd.command
+            )
         })
     end
 
-    vim.ui.select(display_items, {
-        prompt = "Select a command to run:",
-        format_item = function(item)
-            return item.display
+    -- Use Telescope directly
+    require('telescope.pickers').new({}, {
+        prompt_title = "Select a command to run:",
+        finder = require('telescope.finders').new_table({
+            results = display_items,
+            entry_maker = function(entry)
+                return {
+                    value = entry,
+                    display = entry.display,
+                    ordinal = entry.display,
+                }
+            end,
+        }),
+        sorter = require('telescope.sorters').get_generic_fuzzy_sorter(),
+        previewer = require('telescope.previewers').new_buffer_previewer({
+            title = "Command Details",
+            define_preview = function(self, entry, status)
+                local preview_text = entry.value.preview_content or "No preview available"
+                
+                -- Get the actual window width for dynamic wrapping
+                local win_width = vim.api.nvim_win_get_width(0) -- Get current window width
+                local wrap_width = math.max(20, win_width - 4) -- Leave some margin, minimum 20 chars
+                
+                -- Manual text wrapping function
+                local function wrap_text(text, width)
+                    local lines = {}
+                    local words = vim.split(text, '%s+')
+                    local current_line = ""
+                    
+                    for _, word in ipairs(words) do
+                        if #current_line + #word + 1 <= width then
+                            if current_line == "" then
+                                current_line = word
+                            else
+                                current_line = current_line .. " " .. word
+                            end
+                        else
+                            if current_line ~= "" then
+                                table.insert(lines, current_line)
+                            end
+                            current_line = word
+                        end
+                    end
+                    if current_line ~= "" then
+                        table.insert(lines, current_line)
+                    end
+                    return lines
+                end
+                
+                -- Split by newlines first, then wrap each line
+                local original_lines = vim.split(preview_text, '\n')
+                local wrapped_lines = {}
+                
+                for _, line in ipairs(original_lines) do
+                    if #line <= wrap_width then
+                        table.insert(wrapped_lines, line)
+                    else
+                        local wrapped = wrap_text(line, wrap_width)
+                        for _, wrapped_line in ipairs(wrapped) do
+                            table.insert(wrapped_lines, wrapped_line)
+                        end
+                    end
+                end
+                
+                vim.api.nvim_buf_set_lines(self.state.bufnr, 0, -1, false, wrapped_lines)
+            end,
+        }),
+        attach_mappings = function(prompt_bufnr, map)
+            local actions = require('telescope.actions')
+            actions.select_default:replace(function()
+                actions.close(prompt_bufnr)
+                local selection = require('telescope.actions.state').get_selected_entry()
+                if selection then
+                    local selected_cmd = selection.value.command
+                    execute_command(selected_cmd.command, launch_type, selected_cmd.name)
+                end
+            end)
+            return true
         end,
-    }, function(choice)
-        if choice then
-            local selected_cmd = choice.command
-            execute_command(selected_cmd.command, launch_type, selected_cmd.name)
-        end
-    end)
+    }):find()
 end
 
 -- Main functions
