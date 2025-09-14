@@ -93,8 +93,38 @@ local function filter_commands(commands, query)
     return filtered
 end
 
+-- Write stats to file
+local function write_cmd_stats(command_name)
+    local cwd = get_cwd()
+    local stats_file = cwd .. "/.local_cmd_bookmarks_stats"
+    local timestamp = os.time()
+    
+    -- Read existing stats
+    local stats = {}
+    if vim.fn.filereadable(stats_file) == 1 then
+        local stats_lines = vim.fn.readfile(stats_file)
+        for _, line in ipairs(stats_lines) do
+            local name, ts = line:match("^([^|]+)|(.+)$")
+            if name and ts then
+                stats[name] = ts
+            end
+        end
+    end
+    
+    -- Update the timestamp for this command
+    stats[command_name] = timestamp
+    
+    -- Write back to file
+    local lines = {}
+    for name, ts in pairs(stats) do
+        table.insert(lines, name .. "|" .. ts)
+    end
+    
+    vim.fn.writefile(lines, stats_file)
+end
+
 -- Execute command with specified window type
-local function execute_command(command, window_type)
+local function execute_command(command, window_type, command_name)
     -- Make sure to use same ids as: https://github.com/NvChad/NvChad/blob/v2.5/lua/nvchad/mappings.lua
     if window_type == "vertical" then
         -- Use NvChad's vertical terminal runner
@@ -123,6 +153,11 @@ local function execute_command(command, window_type)
     else
         vim.notify("Invalid launch type: " .. window_type, vim.log.levels.ERROR)
         return
+    end
+    
+    -- Update timestamp if command_name is provided
+    if command_name then
+        write_cmd_stats(command_name)
     end
     
     -- Save as last command in memory
@@ -158,7 +193,7 @@ local function create_floating_window(commands, launch_type)
     }, function(choice)
         if choice then
             local selected_cmd = choice.command
-            execute_command(selected_cmd.command, launch_type)
+            execute_command(selected_cmd.command, launch_type, selected_cmd.name)
         end
     end)
 end
@@ -185,7 +220,7 @@ function M.launch_last()
         return
     end
     
-    execute_command(last_command, last_window_type)
+    execute_command(last_command, last_window_type, nil) -- No command_name for last command
 end
 
 -- Setup function
