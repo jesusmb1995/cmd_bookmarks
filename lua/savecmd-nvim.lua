@@ -37,15 +37,16 @@ local function read_cmd_bookmarks()
         return commands
     end
     
-    -- Read bookmarks file
+    -- Read bookmarks file and track line numbers
     local lines = vim.fn.readfile(bookmarks_file)
-    for _, line in ipairs(lines) do
+    for line_num, line in ipairs(lines) do
         local name, cmd = line:match("^([^|]+)|(.+)$")
         if name and cmd then
             table.insert(commands, {
                 name = name,
                 command = cmd,
-                last_used = 0
+                last_used = 0,
+                line_number = line_num  -- Track line number for editing
             })
         end
     end
@@ -73,6 +74,24 @@ local function read_cmd_bookmarks()
     end
     
     return commands
+end
+
+-- Open bookmarks file for editing at specific line
+local function edit_bookmarks_file(line_number)
+    local cwd = get_cwd()
+    local bookmarks_file = cwd .. "/.local_cmd_bookmarks"
+    
+    -- Check if bookmarks file exists
+    if vim.fn.filereadable(bookmarks_file) == 0 then
+        vim.notify("No bookmarks file found in current directory", vim.log.levels.WARN)
+        return
+    end
+    
+    -- Open the file and jump to the specified line
+    vim.cmd("edit " .. vim.fn.fnameescape(bookmarks_file))
+    if line_number then
+        vim.cmd("normal! " .. line_number .. "G")
+    end
 end
 
 -- Filter commands based on search query
@@ -289,6 +308,8 @@ local function create_floating_window(commands, launch_type)
         }),
         attach_mappings = function(prompt_bufnr, map)
             local actions = require('telescope.actions')
+            
+            -- Default action: run command
             actions.select_default:replace(function()
                 actions.close(prompt_bufnr)
                 local selection = require('telescope.actions.state').get_selected_entry()
@@ -297,6 +318,27 @@ local function create_floating_window(commands, launch_type)
                     execute_command(selected_cmd.command, launch_type, selected_cmd.name)
                 end
             end)
+            
+            -- Ctrl+E: edit bookmarks file at selected line
+            map('i', '<C-e>', function()
+                actions.close(prompt_bufnr)
+                local selection = require('telescope.actions.state').get_selected_entry()
+                if selection then
+                    local selected_cmd = selection.value.command
+                    edit_bookmarks_file(selected_cmd.line_number)
+                end
+            end)
+            
+            -- Also support Ctrl+E in normal mode
+            map('n', '<C-e>', function()
+                actions.close(prompt_bufnr)
+                local selection = require('telescope.actions.state').get_selected_entry()
+                if selection then
+                    local selected_cmd = selection.value.command
+                    edit_bookmarks_file(selected_cmd.line_number)
+                end
+            end)
+            
             return true
         end,
     }):find()
