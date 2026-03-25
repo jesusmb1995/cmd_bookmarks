@@ -40,13 +40,22 @@ local function read_cmd_bookmarks()
     -- Read bookmarks file and track line numbers
     local lines = vim.fn.readfile(bookmarks_file)
     for line_num, line in ipairs(lines) do
-        local name, cmd = line:match("^([^|]+)|(.+)$")
-        if name and cmd then
+        local raw_name, cmd = line:match("^([^|]+)|(.+)$")
+        if raw_name and cmd then
+            local parts = vim.split(raw_name, "+")
+            local name = parts[#parts]
+            local deps = {}
+            for i = 1, #parts - 1 do
+                table.insert(deps, parts[i])
+            end
+
             table.insert(commands, {
                 name = name,
+                raw_name = raw_name,
                 command = cmd,
+                dependencies = deps,
                 last_used = 0,
-                line_number = line_num  -- Track line number for editing
+                line_number = line_num,
             })
         end
     end
@@ -142,6 +151,51 @@ local function write_cmd_stats(command_name)
     vim.fn.writefile(lines, stats_file)
 end
 
+-- Build a lookup table: display name → command entry
+local function build_command_lookup(commands)
+    local lookup = {}
+    for _, cmd in ipairs(commands) do
+        lookup[cmd.name] = cmd
+    end
+    return lookup
+end
+
+-- Resolve dependency chain, returns ordered list of shell commands or nil on error.
+-- Uses visited/resolved sets for cycle detection and deduplication.
+local function resolve_dep_chain(lookup, name, visited, resolved)
+    visited = visited or {}
+    resolved = resolved or {}
+
+    if resolved[name] then
+        return {}
+    end
+    if visited[name] then
+        vim.notify("Circular dependency detected: " .. name, vim.log.levels.ERROR)
+        return nil
+    end
+
+    visited[name] = true
+
+    local entry = lookup[name]
+    if not entry then
+        vim.notify("Dependency not found: " .. name, vim.log.levels.ERROR)
+        return nil
+    end
+
+    local chain = {}
+    for _, dep in ipairs(entry.dependencies) do
+        local sub = resolve_dep_chain(lookup, dep, visited, resolved)
+        if sub == nil then return nil end
+        for _, c in ipairs(sub) do
+            table.insert(chain, c)
+        end
+    end
+
+    table.insert(chain, entry.command)
+    resolved[name] = true
+    return chain
+end
+
 -- Execute command with specified window type
 local function execute_command(command, window_type, command_name)
     -- Make sure to use same ids as: https://github.com/NvChad/NvChad/blob/v2.5/lua/nvchad/mappings.lua
@@ -222,18 +276,28 @@ local function create_floating_window(commands, launch_type)
         return
     end
     
+    local lookup = build_command_lookup(commands)
+
     -- Create display items with numbers
     local display_items = {}
     for i, cmd in ipairs(commands) do
         local number_str = string.format("%2d", i)
-        local display_text = string.format("[%s] %s", number_str, cmd.name)
+        local deps_indicator = ""
+        if #cmd.dependencies > 0 then
+            deps_indicator = "  [+" .. table.concat(cmd.dependencies, "+") .. "]"
+        end
+        local display_text = string.format("[%s] %s%s", number_str, cmd.name, deps_indicator)
+        local deps_line = #cmd.dependencies > 0
+            and ("Deps: " .. table.concat(cmd.dependencies, " → ") .. " → " .. cmd.name)
+            or "No dependencies"
         table.insert(display_items, {
             index = i,
             command = cmd,
             display = display_text,
-            preview_content = string.format("\n[%s] %s\n\n%s", 
+            preview_content = string.format("\n[%s] %s\n%s\n\n%s",
                 cmd.name,
                 cmd.last_used > 0 and os.date("%Y-%m-%d %H:%M:%S", cmd.last_used) or "Never",
+                deps_line,
                 cmd.command
             )
         })
@@ -338,7 +402,26 @@ local function create_floating_window(commands, launch_type)
                     edit_bookmarks_file(selected_cmd.line_number)
                 end
             end)
-            
+
+            -- Ctrl+D: run with dependencies resolved first
+            local function run_with_deps()
+                actions.close(prompt_bufnr)
+                local selection = require('telescope.actions.state').get_selected_entry()
+                if not selection then return end
+                local selected_cmd = selection.value.command
+                if #selected_cmd.dependencies == 0 then
+                    execute_command(selected_cmd.command, launch_type, selected_cmd.name)
+                    return
+                end
+                local chain = resolve_dep_chain(lookup, selected_cmd.name, {}, {})
+                if chain and #chain > 0 then
+                    local full_command = table.concat(chain, " && ")
+                    execute_command(full_command, launch_type, selected_cmd.name)
+                end
+            end
+            map('i', '<C-d>', run_with_deps)
+            map('n', '<C-d>', run_with_deps)
+
             return true
         end,
     }):find()

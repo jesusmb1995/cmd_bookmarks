@@ -53,18 +53,18 @@ cmdsave() {
         return 1
     fi
 
-    # Check if command already exists
-    local existing_cmd=""
+    # Check if command already exists (by display name, supports dep+name format)
+    local existing_line=""
     if [[ -f "$cmd_bookmarks" ]]; then
-        existing_cmd=$(grep "^$cmd_name|" "$cmd_bookmarks" | tail -1 | cut -d'|' -f2-)
+        existing_line=$(_find_bookmark_line "$cmd_name" "$cmd_bookmarks")
     fi
 
-    if [[ -n "$existing_cmd" ]]; then
-        # Command exists, append with &&
+    if [[ -n "$existing_line" ]]; then
+        local raw_name="${existing_line%%|*}"
+        local existing_cmd="${existing_line#*|}"
         local new_cmd="$existing_cmd && $last_cmd"
-        # Remove the old entry and add the new one
-        sed -i "/^$cmd_name|/d" "$cmd_bookmarks" 2>/dev/null
-        echo "$cmd_name|$new_cmd" >> "$cmd_bookmarks"
+        sed -i "/^${raw_name}|/d" "$cmd_bookmarks" 2>/dev/null
+        echo "$raw_name|$new_cmd" >> "$cmd_bookmarks"
         echo "Appended '$last_cmd' to existing command '$cmd_name'"
         echo "New command: $new_cmd"
     else
@@ -79,14 +79,36 @@ cmdsave() {
     _local_cmd_bookmarks_commands
 }
 
+# Find a bookmark line by display name (last + segment)
+_find_bookmark_line() {
+    local cmd_name="$1"
+    local cmd_bookmarks="$2"
+    awk -F'|' -v name="$cmd_name" '{
+        n = split($1, parts, "+")
+        if (parts[n] == name) result = $0
+    } END { if (result) print result }' "$cmd_bookmarks"
+}
+
 # Function to execute a saved command
+# Use -d flag to run dependencies first: cmdrun -d name
 cmdrun() {
+    local with_deps=false
+    if [[ "$1" == "-d" ]]; then
+        with_deps=true
+        shift
+    fi
+
     if [[ $# -gt 1 ]]; then
         for cmd_name in "$@"; do
-            cmdrun "$cmd_name" || return $?
+            if [[ "$with_deps" == true ]]; then
+                cmdrun -d "$cmd_name" || return $?
+            else
+                cmdrun "$cmd_name" || return $?
+            fi
         done
         return
     fi
+
     local cmd_name="$1"
     local dir="$(pwd)"
     local cmd_bookmarks="$dir/.local_cmd_bookmarks"
@@ -94,19 +116,30 @@ cmdrun() {
     if [[ ! -f "$cmd_bookmarks" ]]; then
         echo "No local bookmarks file found: $cmd_bookmarks"
         return 1
-    fi 
+    fi
 
-    # Find the command by name
-    local cmd=$(grep "^$cmd_name|" "$cmd_bookmarks" | tail -1 | cut -d'|' -f2-)
+    local line=$(_find_bookmark_line "$cmd_name" "$cmd_bookmarks")
 
-    if [[ -z "$cmd" ]]; then
-      echo "Command '$cmd_name' not found in local bookmarks '$cmd_bookmarks'. Use 'cmdlist' to show available bookmarks."
+    if [[ -z "$line" ]]; then
+        echo "Command '$cmd_name' not found in local bookmarks '$cmd_bookmarks'. Use 'cmdlist' to show available bookmarks."
         return 1
-    fi 
+    fi
+
+    local raw_name="${line%%|*}"
+    local cmd="${line#*|}"
+
+    # Resolve and run dependencies if requested
+    if [[ "$with_deps" == true && "$raw_name" == *"+"* ]]; then
+        local deps_str="${raw_name%+*}"
+        local deps=(${(s:+:)deps_str})
+        for dep in "${deps[@]}"; do
+            echo "Running dependency: $dep"
+            cmdrun -d "$dep" || return $?
+        done
+    fi
 
     _update_cmd_stats "$cmd_name"
 
-    # Execute the command
     echo "Running: $cmd"
     eval "$cmd"
 }
@@ -122,7 +155,19 @@ cmdlist() {
     fi
 
     echo "Available commands:"
-    awk -F'|' '{printf "%-20s %s\n", $1, $2}' "$cmd_bookmarks"
+    awk -F'|' '{
+        n = split($1, parts, "+")
+        name = parts[n]
+        deps = ""
+        if (n > 1) {
+            for (i = 1; i < n; i++) {
+                if (deps != "") deps = deps "+"
+                deps = deps parts[i]
+            }
+            deps = " [+" deps "]"
+        }
+        printf "%-20s%-16s %s\n", name, deps, $2
+    }' "$cmd_bookmarks"
 }
 
 # Completion function
@@ -134,14 +179,18 @@ _local_cmd_bookmarks_commands() {
 
     if [[ -f "$cmd_bookmarks" ]]; then
         if [[ -f "$cmd_stats" ]]; then
-            # Sort by last run date (most recent first)
+            # Sort by last run date (most recent first), use display name (last + segment)
             commands=($(awk -F'|' '
-                NR==FNR {stats[$1]=$2; next}
-                {if (stats[$1]) print stats[$1] "|" $1; else print "0|" $1}
+                NR==FNR {
+                    n = split($1, p, "+"); stats[p[n]] = $2; next
+                }
+                {
+                    n = split($1, p, "+"); name = p[n]
+                    if (stats[name]) print stats[name] "|" name; else print "0|" name
+                }
             ' "$cmd_stats" "$cmd_bookmarks" | sort -t'|' -k1,1nr | cut -d'|' -f2))
         else
-            # Fallback to original behavior if no stats file
-            commands=($(cut -d'|' -f1 "$cmd_bookmarks" | sort -u))
+            commands=($(awk -F'|' '{n=split($1,p,"+"); print p[n]}' "$cmd_bookmarks" | sort -u))
         fi
         
         if [[ ${#commands[@]} -gt 0 ]]; then
