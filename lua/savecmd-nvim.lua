@@ -18,6 +18,33 @@ local function get_cwd()
     return vim.fn.getcwd()
 end
 
+-- Resolve bookmarks/stats file paths.
+-- Central mode: savecmd deployed at ~/.local/share/cmd_bookmarks -> per-cwd
+-- subdirectories there. Legacy mode: files stay in the cwd itself.
+local function store_paths()
+    local cwd = get_cwd()
+    local central_root = vim.fn.expand("~/.local/share/cmd_bookmarks")
+    if vim.fn.filereadable(central_root .. "/savecmd.zsh") == 1 then
+        local store_dir = central_root .. "/" .. cwd:gsub("/", "_")
+        vim.fn.mkdir(store_dir, "p")
+        local bookmarks_file = store_dir .. "/.local_cmd_bookmarks"
+        local stats_file = store_dir .. "/.local_cmd_bookmarks_stats"
+        -- One-time auto-import of legacy in-cwd bookmarks (never overwrites non-empty central data)
+        if vim.fn.filereadable(bookmarks_file) ~= 1 or #vim.fn.readfile(bookmarks_file) == 0 then
+            local legacy_bookmarks = cwd .. "/.local_cmd_bookmarks"
+            if vim.fn.filereadable(legacy_bookmarks) == 1 then
+                vim.fn.writefile(vim.fn.readfile(legacy_bookmarks), bookmarks_file)
+                local legacy_stats = cwd .. "/.local_cmd_bookmarks_stats"
+                if vim.fn.filereadable(legacy_stats) == 1 then
+                    vim.fn.writefile(vim.fn.readfile(legacy_stats), stats_file)
+                end
+            end
+        end
+        return bookmarks_file, stats_file
+    end
+    return cwd .. "/.local_cmd_bookmarks", cwd .. "/.local_cmd_bookmarks_stats"
+end
+
 -- Save last command info in memory
 local function save_last_command_info(command, window_type)
     last_command = command
@@ -26,9 +53,7 @@ end
 
 -- Read and parse the command bookmarks file
 local function read_cmd_bookmarks()
-    local cwd = get_cwd()
-    local bookmarks_file = cwd .. "/.local_cmd_bookmarks"
-    local stats_file = cwd .. "/.local_cmd_bookmarks_stats"
+    local bookmarks_file, stats_file = store_paths()
     
     local commands = {}
     
@@ -87,8 +112,7 @@ end
 
 -- Open bookmarks file for editing at specific line
 local function edit_bookmarks_file(line_number)
-    local cwd = get_cwd()
-    local bookmarks_file = cwd .. "/.local_cmd_bookmarks"
+    local bookmarks_file = store_paths()
     
     -- Check if bookmarks file exists
     if vim.fn.filereadable(bookmarks_file) == 0 then
@@ -123,8 +147,7 @@ end
 
 -- Write stats to file
 local function write_cmd_stats(command_name)
-    local cwd = get_cwd()
-    local stats_file = cwd .. "/.local_cmd_bookmarks_stats"
+    local _, stats_file = store_paths()
     local timestamp = os.time()
     
     -- Read existing stats
@@ -199,24 +222,29 @@ end
 -- Execute command with specified window type
 local function execute_command(command, window_type, command_name)
     -- Make sure to use same ids as: https://github.com/NvChad/NvChad/blob/v2.5/lua/nvchad/mappings.lua
-    if window_type == "vertical" then
-        -- Use NvChad's vertical terminal runner
+    if window_type == "horizontal" then
+        -- Prefer the nvim config's shared WARM horizontal terminal (the
+        -- inner-tmux bottom panel the <C-g>/<A-g> toggle uses) so bookmarks
+        -- run in the SAME panel as bazel-launcher and the shell/ctest runner.
+        local ok_warm, warm = pcall(require, "mappings.terminal")
+        if ok_warm and type(warm) == "table" and type(warm.run_in_horizontal_warm) == "function" then
+            warm.run_in_horizontal_warm(command)
+        else
+            require("nvchad.term").runner {
+                pos = "sp",
+                cmd = command,
+                id = "htoggleTerm",
+                clear_cmd = false
+            }
+        end
+    elseif window_type == "vertical" then
         require("nvchad.term").runner {
             pos = "vsp",
             cmd = command,
             id = "vtoggleTerm",
             clear_cmd = false
         }
-    elseif window_type == "horizontal" then
-        -- Use NvChad's horizontal terminal runner
-        require("nvchad.term").runner {
-            pos = "sp",
-            cmd = command,
-            id = "htoggleTerm",
-            clear_cmd = false
-        }
     elseif window_type == "float" then
-        -- Use NvChad's float terminal runner
         require("nvchad.term").runner {
             pos = "float",
             cmd = command,
@@ -227,15 +255,15 @@ local function execute_command(command, window_type, command_name)
         vim.notify("Invalid launch type: " .. window_type, vim.log.levels.ERROR)
         return
     end
-    
+
     -- Update timestamp if command_name is provided
     if command_name then
         write_cmd_stats(command_name)
     end
-    
+
     -- Save as last command in memory
     save_last_command_info(command, window_type)
-    
+
     vim.notify("Running: " .. command, vim.log.levels.INFO)
 end
 
@@ -473,6 +501,9 @@ function M.setup(opts)
         desc = "Launch the last run command in the same window type"
     })
 end
+
+-- Test hook: expose store path resolution
+M._store_paths = store_paths
 
 M.setup()
 

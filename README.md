@@ -15,6 +15,34 @@ cmdrun build
 You can also append to an existing bookmark. Running `cmdsave build` again will
 append the last shell command to the existing `build` entry with `&&`.
 
+## Bookmark storage: central vs legacy
+
+When this repo is deployed at `~/.local/share/cmd_bookmarks` (the standard
+gpersonal install), bookmarks are stored centrally per project directory:
+
+```
+~/.local/share/cmd_bookmarks/<flattened_cwd>/.local_cmd_bookmarks
+~/.local/share/cmd_bookmarks/<flattened_cwd>/.local_cmd_bookmarks_stats
+```
+
+where `<flattened_cwd>` is the absolute path of the directory with every `/`
+replaced by `_` (e.g. `/tmp/x/proj a` -> `_tmp_x_proj a`). Nothing is written
+into the project directory itself.
+
+When the script lives anywhere else, it falls back to legacy behavior: the
+`.local_cmd_bookmarks*` files are kept in the current working directory. This
+also applies to the nvim plugin (`lua/savecmd-nvim.lua`), which uses the same
+detection and layout.
+
+On first use in central mode, existing legacy `.local_cmd_bookmarks` (and
+`_stats`, if present) files found in the current directory are automatically
+imported into the central store. The import happens only when the central
+bookmarks file is missing or empty, so existing central data is never
+overwritten. The legacy files are left in place untouched.
+
+Host tests: `zsh test/run_tests.sh` (from the repo root of this project)
+exercises central mode, auto-import and legacy mode.
+
 ## Dependencies
 
 Commands can declare dependencies on other bookmarks using `+` syntax in

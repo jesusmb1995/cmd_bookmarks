@@ -4,11 +4,43 @@
 # Function to save a command with a name to local history
 # TODO sort categories and commands within cat by date
 
+# Resolved once at source time: at interactive call time %x is no longer the script path
+_CMD_BOOKMARKS_SCRIPT_DIR_A="${${(%):-%x}:A:h}"
+_CMD_BOOKMARKS_SCRIPT_DIR="${${(%):-%x}:a:h}"
+
+# Resolve the directory holding .local_cmd_bookmarks* for the current PWD.
+# Central mode: script deployed at ~/.local/share/cmd_bookmarks -> store per-cwd
+# subdirectories there. Legacy mode: files stay in the cwd itself.
+_cmd_bookmarks_store_dir() {
+    local central_root="$HOME/.local/share/cmd_bookmarks"
+    if [[ "$_CMD_BOOKMARKS_SCRIPT_DIR" == "$central_root" || "$_CMD_BOOKMARKS_SCRIPT_DIR_A" == "$central_root" ]]; then
+        local store="$central_root/${PWD//\//_}"
+        mkdir -p "$store"
+        # One-time auto-import of legacy in-cwd bookmarks (never overwrites non-empty central data)
+        if [[ ! -s "$store/.local_cmd_bookmarks" && -f "$PWD/.local_cmd_bookmarks" ]]; then
+            cp "$PWD/.local_cmd_bookmarks" "$store/.local_cmd_bookmarks"
+            if [[ -f "$PWD/.local_cmd_bookmarks_stats" ]]; then
+                cp "$PWD/.local_cmd_bookmarks_stats" "$store/.local_cmd_bookmarks_stats"
+            fi
+        fi
+        echo "$store"
+    else
+        echo "$PWD"
+    fi
+}
+
+_cmd_bookmarks_file() {
+    echo "$(_cmd_bookmarks_store_dir)/.local_cmd_bookmarks"
+}
+
+_cmd_bookmarks_stats_file() {
+    echo "$(_cmd_bookmarks_store_dir)/.local_cmd_bookmarks_stats"
+}
+
 # Helper function to update stats
 _update_cmd_stats() {
     local cmd_name="$1"
-    local dir="$(pwd)"
-    local cmd_stats="$dir/.local_cmd_bookmarks_stats"
+    local cmd_stats="$(_cmd_bookmarks_stats_file)"
     local timestamp=$(date +%s)
     
     # Remove existing entry for this command if it exists
@@ -26,8 +58,7 @@ cmdsave() {
     local cmd_name="$1"
     if [[ -z "$cmd_name" ]]; then
         # If no name provided, try to get the last used bookmark from stats
-        local dir="$(pwd)"
-        local cmd_stats="$dir/.local_cmd_bookmarks_stats"
+        local cmd_stats="$(_cmd_bookmarks_stats_file)"
         if [[ -f "$cmd_stats" ]]; then
             cmd_name=$(sort -t'|' -k2,2nr "$cmd_stats" | head -1 | cut -d'|' -f1)
         fi
@@ -36,8 +67,7 @@ cmdsave() {
         echo "Error: No last used bookmark found. Provide a name for the command."
         return 1
     fi
-    local dir="$(pwd)"
-    local cmd_bookmarks="$dir/.local_cmd_bookmarks"
+    local cmd_bookmarks="$(_cmd_bookmarks_file)"
 
     # Check if a name was provided
     if [[ -z "$cmd_name" ]]; then
@@ -110,8 +140,7 @@ cmdrun() {
     fi
 
     local cmd_name="$1"
-    local dir="$(pwd)"
-    local cmd_bookmarks="$dir/.local_cmd_bookmarks"
+    local cmd_bookmarks="$(_cmd_bookmarks_file)"
 
     if [[ ! -f "$cmd_bookmarks" ]]; then
         echo "No local bookmarks file found: $cmd_bookmarks"
@@ -146,8 +175,7 @@ cmdrun() {
 
 # Function to list available bookmarks
 cmdlist() {
-    local dir="$(pwd)"
-    local cmd_bookmarks="$dir/.local_cmd_bookmarks"
+    local cmd_bookmarks="$(_cmd_bookmarks_file)"
 
     if [[ ! -f "$cmd_bookmarks" ]]; then
         echo "No bookmark file found $cmd_bookmarks. Use 'cmdsave' to create new bookmarks."
@@ -172,9 +200,8 @@ cmdlist() {
 
 # Completion function
 _local_cmd_bookmarks_commands() {
-    local dir="$(pwd)"
-    local cmd_bookmarks="$dir/.local_cmd_bookmarks"
-    local cmd_stats="$dir/.local_cmd_bookmarks_stats"
+    local cmd_bookmarks="$(_cmd_bookmarks_file)"
+    local cmd_stats="$(_cmd_bookmarks_stats_file)"
     local commands=()
 
     if [[ -f "$cmd_bookmarks" ]]; then
